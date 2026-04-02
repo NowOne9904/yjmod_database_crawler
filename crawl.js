@@ -76,34 +76,36 @@ function parseProduct(itId, html) {
     ? titleMatch[1].replace(/\s*[:|]\s*(영재컴퓨터|YJMOD)[\s\S]*/i, '').trim()
     : null;
 
-// 1. 일반 PC 금액 (또는 기본 판매가) 추출
+  // 판매가
+  // 1순위: id="r_1set_price" (raw HTML에 존재, 조립PC 총액)
   let sellingPrice = null;
-  const inputPriceMatch = html.match(/name="it_price"[^>]*value="(\d+)"/);
-  if (inputPriceMatch) sellingPrice = parseInt(inputPriceMatch[1]);
+  const r1setMatch = html.match(/id="r_1set_price"[^>]*>([\d,]+)\s*원/);
+  if (r1setMatch) sellingPrice = parseInt(r1setMatch[1].replace(/,/g, ''));
 
+  // 2순위: r_1set_price 다른 형태 (텍스트 노드 사이 공백 있을 수 있음)
   if (!sellingPrice || sellingPrice === 0) {
-    const textPriceMatch = html.match(/(?:일반\s*pc\s*금액|판매가)[\s\S]{0,100}?([\d,]+)\s*원/i);
-    if (textPriceMatch) sellingPrice = parseInt(textPriceMatch[1].replace(/,/g, ''));
+    const r1setMatch2 = html.match(/id="r_1set_price"[^>]*>\s*([\d,]+)\s*원/);
+    if (r1setMatch2) sellingPrice = parseInt(r1setMatch2[1].replace(/,/g, ''));
   }
 
-  // 2. 무이자 할부 (월 결제 금액) 추출
-  let monthlyPrice = null;
-  const monthlyMatch = html.match(/(?:월\s*결제\s*금액|무이자\s*할부)[\s\S]{0,100}?([\d,]+)\s*원/i);
-  if (monthlyMatch) monthlyPrice = parseInt(monthlyMatch[1].replace(/,/g, ''));
-
-  // 3. 가격 보정 (할부 전용 상품 처리)
-  // 일반 가격이 0원이고 월 결제 금액만 있다면, 월 결제 금액을 판매가로 취급합니다.
-  if ((!sellingPrice || sellingPrice === 0) && monthlyPrice > 0) {
-    sellingPrice = monthlyPrice;
+  // 3순위: input[name="it_price"] (일부 표준 상품)
+  if (!sellingPrice || sellingPrice === 0) {
+    const inputMatch = html.match(/name="it_price"[^>]*value="(\d+)"/);
+    if (inputMatch && parseInt(inputMatch[1]) > 0) sellingPrice = parseInt(inputMatch[1]);
   }
 
-  // 4. 혜택가 추출
-  let benefitPrice = null;
+  // 4순위: 페이지 내 가격 텍스트 패턴 (마지막 수단)
+  if (!sellingPrice || sellingPrice === 0) {
+    const textMatch = html.match(/판매가[\s\S]{0,200}?([\d,]{6,})\s*원/);
+    if (textMatch) sellingPrice = parseInt(textMatch[1].replace(/,/g, ''));
+  }
+
+  // 혜택가
   const benefitMatch = html.match(/혜택가[\s\S]{0,300}?([\d,]{5,})\s*원/);
-  if (benefitMatch) benefitPrice = parseInt(benefitMatch[1].replace(/,/g, ''));
+  const benefitPrice = benefitMatch ? parseInt(benefitMatch[1].replace(/,/g, '')) : null;
 
-  // 5. 품절 여부 판별
-  const isSoldout = (!sellingPrice || sellingPrice === 0) ||
+  // 품절 여부
+  const isSoldout = !sellingPrice || sellingPrice === 0 ||
     /class="[^"]*btn_soldout[^"]*"|품절된 상품/.test(html);
 
   // 스펙 파싱 (CombiTopOption)
