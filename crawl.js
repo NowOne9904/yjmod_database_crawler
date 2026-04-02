@@ -76,36 +76,50 @@ function parseProduct(itId, html) {
     ? titleMatch[1].replace(/\s*[:|]\s*(영재컴퓨터|YJMOD)[\s\S]*/i, '').trim()
     : null;
 
-  // 판매가
-  // 1순위: id="r_1set_price" (raw HTML에 존재, 조립PC 총액)
+  // ── 가격 파싱 ──────────────────────────────────
   let sellingPrice = null;
-  const r1setMatch = html.match(/id="r_1set_price"[^>]*>([\d,]+)\s*원/);
+
+  // 1순위: id="r_1set_price" (조립PC 총액 - 일반 가격 상품)
+  const r1setMatch = html.match(/id="r_1set_price"[^>]*>\s*([\d,]+)\s*원/);
   if (r1setMatch) sellingPrice = parseInt(r1setMatch[1].replace(/,/g, ''));
 
-  // 2순위: r_1set_price 다른 형태 (텍스트 노드 사이 공백 있을 수 있음)
+  // 2순위: input[name="it_price"] (분담무이자 등 - 속성 순서 무관하게 태그 전체 검색)
   if (!sellingPrice || sellingPrice === 0) {
-    const r1setMatch2 = html.match(/id="r_1set_price"[^>]*>\s*([\d,]+)\s*원/);
-    if (r1setMatch2) sellingPrice = parseInt(r1setMatch2[1].replace(/,/g, ''));
+    const itPriceTag = html.match(/<input[^>]+name="it_price"[^>]*>/i);
+    if (itPriceTag) {
+      const valMatch = itPriceTag[0].match(/value="(\d+)"/);
+      if (valMatch && parseInt(valMatch[1]) > 0) sellingPrice = parseInt(valMatch[1]);
+    }
   }
 
-  // 3순위: input[name="it_price"] (일부 표준 상품)
+  // 3순위: 총 상품금액 텍스트 (분담무이자 페이지 내 표시)
   if (!sellingPrice || sellingPrice === 0) {
-    const inputMatch = html.match(/name="it_price"[^>]*value="(\d+)"/);
-    if (inputMatch && parseInt(inputMatch[1]) > 0) sellingPrice = parseInt(inputMatch[1]);
+    const totalMatch = html.match(/총\s*상품금액\s*:?\s*[\s\S]{0,30}?([\d,]{6,})/);
+    if (totalMatch) sellingPrice = parseInt(totalMatch[1].replace(/,/g, ''));
   }
 
-  // 4순위: 페이지 내 가격 텍스트 패턴 (마지막 수단)
+  // 4순위: 판매가 텍스트 패턴 (최후 수단)
   if (!sellingPrice || sellingPrice === 0) {
     const textMatch = html.match(/판매가[\s\S]{0,200}?([\d,]{6,})\s*원/);
     if (textMatch) sellingPrice = parseInt(textMatch[1].replace(/,/g, ''));
+  }
+
+  // 분담무이자 월납부금액 파싱
+  let monthlyPrice = null;
+  let installmentMonths = null;
+  const monthlyMatch = html.match(/월\s*납부금액\((\d+)개월\)[^<\d]*([\d,]{4,})/);
+  if (monthlyMatch) {
+    installmentMonths = parseInt(monthlyMatch[1]);
+    monthlyPrice = parseInt(monthlyMatch[2].replace(/,/g, ''));
   }
 
   // 혜택가
   const benefitMatch = html.match(/혜택가[\s\S]{0,300}?([\d,]{5,})\s*원/);
   const benefitPrice = benefitMatch ? parseInt(benefitMatch[1].replace(/,/g, '')) : null;
 
-  // 품절 여부
-  const isSoldout = !sellingPrice || sellingPrice === 0 ||
+  // 품절 여부 (분담무이자는 가격이 있어도 soldout 아님)
+  const isSoldout = (!sellingPrice || sellingPrice === 0) &&
+    !monthlyPrice &&
     /class="[^"]*btn_soldout[^"]*"|품절된 상품/.test(html);
 
   // 스펙 파싱 (CombiTopOption)
@@ -134,6 +148,8 @@ function parseProduct(itId, html) {
     it_id: itId, name,
     selling_price: (sellingPrice && sellingPrice > 0) ? sellingPrice : null,
     benefit_price: (benefitPrice && benefitPrice > 0) ? benefitPrice : null,
+    monthly_price: (monthlyPrice && monthlyPrice > 0) ? monthlyPrice : null,
+    installment_months: installmentMonths,
     is_soldout: isSoldout,
     image_url: `https://admin.youngjaecomputer.com/data/item/${itId}_l`,
     detail_url: `https://www.youngjaecomputer.com/shop/item.php?it_id=${itId}`,
@@ -166,6 +182,24 @@ async function main() {
   const mainHtml = await get(BASE_HOST, '/');
   for (const m of mainHtml.matchAll(/item\.php\?it_id=(\w+)/g)) allIds.add(m[1]);
   console.log(`메인페이지: ${allIds.size}개`);
+
+  // Installment 페이지 (분담무이자, 이달의 추천 등) - 메인에서 ImCode 동적 수집
+  const installCodes = new Set();
+  for (const m of mainHtml.matchAll(/Installment\.php\?ImCode=([A-Z]{6,10})/g)) installCodes.add(m[1]);
+  // 안전망: 알려진 ImCode 하드코딩 (메인에 없는 경우 대비)
+  ['RXEQEFVT','ZFHRVLQE','XWSGRHSB','XUWRWZWI',
+   'PNXOMGDW','RSNBGRVI','JVCYAAUQ','MZMPNMTP','TSBWBCPA'].forEach(c => installCodes.add(c));
+
+  const instHtmls = await Promise.allSettled(
+    [...installCodes].map(code =>
+      get(BASE_HOST, `/shop/Installment.php?ImCode=${code}`)
+    )
+  );
+  for (const r of instHtmls) {
+    if (r.status !== 'fulfilled') continue;
+    for (const m of r.value.matchAll(/item\.php\?it_id=(\w+)/g)) allIds.add(m[1]);
+  }
+  console.log(`Installment 페이지 포함 후: ${allIds.size}개`);
 
   // recommendPC 1페이지 전체 병렬
   const p1 = await Promise.allSettled(
