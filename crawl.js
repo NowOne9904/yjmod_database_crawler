@@ -76,16 +76,34 @@ function parseProduct(itId, html) {
     ? titleMatch[1].replace(/\s*[:|]\s*(영재컴퓨터|YJMOD)[\s\S]*/i, '').trim()
     : null;
 
-  // 판매가
-  const priceMatch = html.match(/name="it_price"[^>]*value="(\d+)"/);
-  const sellingPrice = priceMatch ? parseInt(priceMatch[1]) : null;
+// 1. 일반 PC 금액 (또는 기본 판매가) 추출
+  let sellingPrice = null;
+  const inputPriceMatch = html.match(/name="it_price"[^>]*value="(\d+)"/);
+  if (inputPriceMatch) sellingPrice = parseInt(inputPriceMatch[1]);
 
-  // 혜택가
+  if (!sellingPrice || sellingPrice === 0) {
+    const textPriceMatch = html.match(/(?:일반\s*pc\s*금액|판매가)[\s\S]{0,100}?([\d,]+)\s*원/i);
+    if (textPriceMatch) sellingPrice = parseInt(textPriceMatch[1].replace(/,/g, ''));
+  }
+
+  // 2. 무이자 할부 (월 결제 금액) 추출
+  let monthlyPrice = null;
+  const monthlyMatch = html.match(/(?:월\s*결제\s*금액|무이자\s*할부)[\s\S]{0,100}?([\d,]+)\s*원/i);
+  if (monthlyMatch) monthlyPrice = parseInt(monthlyMatch[1].replace(/,/g, ''));
+
+  // 3. 가격 보정 (할부 전용 상품 처리)
+  // 일반 가격이 0원이고 월 결제 금액만 있다면, 월 결제 금액을 판매가로 취급합니다.
+  if ((!sellingPrice || sellingPrice === 0) && monthlyPrice > 0) {
+    sellingPrice = monthlyPrice;
+  }
+
+  // 4. 혜택가 추출
+  let benefitPrice = null;
   const benefitMatch = html.match(/혜택가[\s\S]{0,300}?([\d,]{5,})\s*원/);
-  const benefitPrice = benefitMatch ? parseInt(benefitMatch[1].replace(/,/g, '')) : null;
+  if (benefitMatch) benefitPrice = parseInt(benefitMatch[1].replace(/,/g, ''));
 
-  // 품절 여부
-  const isSoldout = !sellingPrice || sellingPrice === 0 ||
+  // 5. 품절 여부 판별
+  const isSoldout = (!sellingPrice || sellingPrice === 0) ||
     /class="[^"]*btn_soldout[^"]*"|품절된 상품/.test(html);
 
   // 스펙 파싱 (CombiTopOption)
